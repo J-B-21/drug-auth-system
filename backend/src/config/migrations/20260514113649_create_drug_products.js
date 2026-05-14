@@ -6,9 +6,11 @@ exports.up = function(knex) {
   return knex.schema.createTable('drug_products', (table) => {
     table.increments('id').primary();
     table.integer('brand_id').notNullable().references('id').inTable('drug_brands').onDelete('CASCADE').onUpdate('CASCADE');
-    table.string('gtin').unique().notNullable();
-    table.string('barcode').unique().notNullable();
-    
+    table.string('form').notNullable();
+    table.integer('quantity').notNullable();
+    table.integer('dosage_unit').notNullable().defaultTo(1);
+    table.string('leaflet_url').notNullable();
+
     table.timestamps(true, true); // Adds created_at and updated_at
   });
 };

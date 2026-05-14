@@ -7,11 +7,11 @@ exports.up = function(knex) {
     table.increments('id').primary();
     table.integer('product_id').notNullable().references('id').inTable('drug_products').onDelete('CASCADE').onUpdate('CASCADE');
     table.integer('ingredient_id').notNullable().references('id').inTable('drug_active_ingredients').onDelete('CASCADE').onUpdate('CASCADE');
-    table.string('dosage').notNullable();
+    table.string('dosage_per_unit').notNullable();
     
     table.timestamps(true, true); // Adds created_at and updated_at
 
-    table.unique(['product_id', 'ingredient_id']); // Ensure a product having the same ingredient can't be listed multiple times
+    table.unique(['product_id', 'ingredient_id']); // Ensures a product having the same ingredient can't be listed multiple times
   });
 };
 

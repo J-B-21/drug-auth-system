@@ -5,13 +5,10 @@
 exports.up = function(knex) {
   return knex.schema.createTable('drug_brands', (table) => {
     table.increments('id').primary();
-    table.string('name').notNullable();
-    table.string('description').notNullable();
-    table.string('manufacturer').notNullable();
+    table.string('name').unique().notNullable();
+    table.integer('manufacturer_id').notNullable().references('id').inTable('drug_manufacturers').onDelete('CASCADE').onUpdate('CASCADE');
     
     table.timestamps(true, true); // Adds created_at and updated_at
-
-    table.unique(['name', 'manufacturer']); // Ensure a manufacturer can't have multiple brands with the same name
   });
 };
 

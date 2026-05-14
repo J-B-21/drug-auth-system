@@ -3,14 +3,15 @@
  * @returns { Promise<void> }
  */
 exports.up = function(knex) {
-  return knex.schema.createTable('drug_units', (table) => {
+  return knex.schema.createTable('drug_batches', (table) => {
     table.increments('id').primary();
     table.integer('product_id').notNullable().references('id').inTable('drug_products').onDelete('CASCADE').onUpdate('CASCADE');
-    table.string('serial_number').unique().notNullable();
-    table.string('batch_number').notNullable();
+    table.string('number').notNullable();
     table.date('expiry_date').notNullable();
     
     table.timestamps(true, true); // Adds created_at and updated_at
+
+    table.unique(['product_id', 'number']); // Ensures a product cannot have duplicate batch numbers
   });
 };
 
@@ -19,5 +20,5 @@ exports.up = function(knex) {
  * @returns { Promise<void> }
  */
 exports.down = function(knex) {
-  return knex.schema.dropTableIfExists('drug_units')
+  return knex.schema.dropTableIfExists('drug_batches')
 };
