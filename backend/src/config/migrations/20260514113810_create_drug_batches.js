@@ -12,6 +12,8 @@ exports.up = function(knex) {
     table.timestamps(true, true); // Adds created_at and updated_at
 
     table.unique(['product_id', 'number']); // Ensures a product cannot have duplicate batch numbers
+
+    table.index(['number']); // Indexes the batch number for faster lookups
   });
 };
 

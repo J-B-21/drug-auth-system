@@ -1,4 +1,6 @@
-// Update with your config settings.
+// Knex configuration for different environments.
+// Reads DB connection settings from environment variables via `.env`.
+// Do not include secrets in source control; `.env` is gitignored.
 require('dotenv').config();
 
 /**
