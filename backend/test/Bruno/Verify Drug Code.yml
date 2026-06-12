@@ -10,7 +10,9 @@ http:
     type: json
     data: |
       {
-        "code": ""
+        "gtin": "03585554088980",
+        "serial_number": "01590553843587",
+        "batch_number": "B0250"
       }
   auth: inherit
 

@@ -56,6 +56,14 @@ const createService = (repositoryOverrides = {}) => {
       logs.push(scanLog);
       return { id: logs.length, ...scanLog };
     },
+    findRecentLogsByScannedValueHash: async () => [],
+    countRecentLogsByMatchedProductId: async () => 0,
+    countRecentLogsByMatchedBatchId: async () => 0,
+    countRecentLogsByMatchedItemId: async () => 0,
+    countRecentLogsByIpHash: async () => 0,
+    findRecentLogsByMatchedItemIdWithStatuses: async () => [],
+    findRecentLogsByMatchedItemIdWithLocation: async () => [],
+    findRecentLogsByScannedValueHashWithLocation: async () => [],
   };
 
   return {
@@ -83,6 +91,30 @@ test('verifies a raw product-level barcode and strips null fields', async () => 
   assert.equal(result.valid, true);
   assert.equal(result.verification_level, 'product');
   assert.equal(logs[0].inputType, 'barcode');
+});
+
+test('logs verification metadata, client telemetry, and forensic flags in scan records', async () => {
+  const { logs, service } = createService({
+    findProductCodeByValue: async () => [{ product_id: 1 }],
+  });
+
+  const telemetry = {
+    device_id: 'device-123',
+    app_version: '1.0.0',
+    location: { latitude: 1.23, longitude: 4.56 },
+    status: 'consumed',
+  };
+
+  const result = await service.verify({ code: '01417282', scan_medium: 'QR', client_telemetry: telemetry });
+
+  assert.equal(result.valid, true);
+  assert.equal(result.verification_level, 'product');
+  assert.equal(result.verification_source, 'qr_code');
+  assert.equal(logs[0].metadata.verification_level, 'product');
+  assert.equal(logs[0].metadata.scan_source, 'qr_code');
+  assert.deepEqual(logs[0].metadata.client_telemetry, telemetry);
+  assert.ok(Array.isArray(logs[0].metadata.forensic_flags));
+  assert.ok(Array.isArray(logs[0].securityFlags));
 });
 
 

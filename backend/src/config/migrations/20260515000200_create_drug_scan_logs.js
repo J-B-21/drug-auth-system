@@ -14,6 +14,12 @@ exports.up = function(knex) {
     table.integer('matched_item_id').nullable().references('id').inTable('drug_items').onDelete('SET NULL').onUpdate('CASCADE');
     table.integer('matched_batch_id').nullable().references('id').inTable('drug_batches').onDelete('SET NULL').onUpdate('CASCADE');
     table.jsonb('metadata').notNullable().defaultTo(knex.raw("'{}'::jsonb"));
+    table.string('request_id', 80).nullable();
+    table.string('scanned_value_hash', 64).nullable();
+    table.string('ip_hash', 64).nullable();
+    table.string('user_agent_hash', 64).nullable();
+    table.boolean('suspicious').notNullable().defaultTo(false);
+    table.jsonb('security_flags').notNullable().defaultTo(knex.raw("'[]'::jsonb"));
     table.timestamp('scanned_at', { useTz: true }).notNullable().defaultTo(knex.fn.now());
 
     table.timestamps(true, true);
@@ -25,7 +31,18 @@ exports.up = function(knex) {
     table.index(['matched_item_id'], 'drug_scan_logs_matched_item_id_idx');
     table.index(['matched_batch_id'], 'drug_scan_logs_matched_batch_id_idx');
     table.index(['scanned_value', 'scanned_at'], 'drug_scan_logs_value_scanned_at_idx');
+    table.index(['request_id'], 'drug_scan_logs_request_id_idx');
+    table.index(['scanned_value_hash', 'scanned_at'], 'drug_scan_logs_value_hash_scanned_at_idx');
+    table.index(['ip_hash', 'scanned_at'], 'drug_scan_logs_ip_hash_scanned_at_idx');
+    table.index(['ip_hash', 'success', 'scanned_at'], 'drug_scan_logs_ip_success_scanned_at_idx');
+    table.index(['failure_reason', 'scanned_at'], 'drug_scan_logs_failure_scanned_at_idx');
   });
+
+  return knex.schema.raw(`
+    CREATE INDEX drug_scan_logs_suspicious_scanned_at_idx
+    ON drug_scan_logs (scanned_at)
+    WHERE suspicious = true
+  `);
 };
 
 /**

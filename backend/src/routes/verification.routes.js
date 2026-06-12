@@ -3,11 +3,17 @@
 const express = require('express');
 
 const verificationController = require('../controllers/verification.controller');
+const progressiveThrottling = require('../middleware/progressiveThrottling');
 const validateRequest = require('../middleware/validateRequest');
 const { verifyDrugSchema } = require('../validators/verification.validator');
 
 const router = express.Router();
 
-router.post('/', validateRequest(verifyDrugSchema), verificationController.verifyDrug);
+router.post(
+  '/',
+  validateRequest(verifyDrugSchema),
+  progressiveThrottling,
+  verificationController.verifyDrug,
+);
 
 module.exports = router;

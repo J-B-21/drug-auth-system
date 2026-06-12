@@ -1,9 +1,10 @@
 // Database connection helper.
 // Selects the Knex configuration based on NODE_ENV and exports a shared Knex instance.
 const knex = require('knex');
+const appConfig = require('./env');
 const knexConfig = require('../../knexfile');
 
-const environment = process.env.NODE_ENV || 'development';
+const environment = appConfig.database.environment;
 const config = knexConfig[environment];
 
 if (!config) {

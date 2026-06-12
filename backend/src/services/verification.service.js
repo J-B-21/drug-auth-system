@@ -1,8 +1,11 @@
 // Service layer that contains the core verification business logic.
 const DrugVerificationRepository = require('../repositories/drugVerification.repository');
 const ScanLogRepository = require('../repositories/scanLog.repository');
+const ForensicDetectionService = require('./forensicDetection.service');
 const { SCAN_INPUT_TYPES } = require('../models/scanLog.model');
 const { isExpiredDate, toDateOnly } = require('../utils/date');
+const { parseGs1DataMatrix } = require('../utils/gs1');
+const logger = require('../utils/logger');
 
 const VERIFICATION_SOURCES = Object.freeze({
   BARCODE: 'barcode',
@@ -21,6 +24,7 @@ const FAILURE_REASONS = Object.freeze({
   AMBIGUOUS_MATCH: 'ambiguous_match',
   COMPONENT_MISMATCH: 'component_mismatch',
   EXPIRED: 'expired',
+  MALFORMED_GS1: 'malformed_gs1',
   NOT_FOUND: 'not_found',
 });
 
@@ -28,22 +32,60 @@ class VerificationService {
   constructor({
     drugRepository = new DrugVerificationRepository(),
     scanLogRepository = new ScanLogRepository(),
+    forensicService = null,
     nowProvider = () => new Date(),
   } = {}) {
     this.drugRepository = drugRepository;
     this.scanLogRepository = scanLogRepository;
     this.nowProvider = nowProvider;
+    this.forensicService = forensicService || new ForensicDetectionService({
+      scanLogRepository: this.scanLogRepository,
+      nowProvider: this.nowProvider,
+    });
   }
 
-  async verify(payload) {
+  async verify(payload, context = {}) {
     let normalizedPayload = this.normalizePayload(payload);
     let wasParsedGs1 = false;
 
     // 1. Try to decompose GS1 Matrix patterns natively
     if (normalizedPayload.code) {
       const parsedComponents = this.parseGs1DataMatrix(normalizedPayload.code);
-      if (parsedComponents) {
-        normalizedPayload = { ...normalizedPayload, ...parsedComponents };
+
+      if (parsedComponents && parsedComponents.malformed) {
+        const outcome = this.failureOutcome({
+          reason: FAILURE_REASONS.MALFORMED_GS1,
+          message: 'Malformed GS1 payload. Please rescan the code or enter the values manually.',
+          inputType: normalizedPayload.scan_medium === 'Bar'
+            ? SCAN_INPUT_TYPES.BARCODE
+            : SCAN_INPUT_TYPES.QR_CODE,
+          verificationSource: VERIFICATION_SOURCES.QR_CODE,
+          rawCode: normalizedPayload.code,
+          exposeInput: false,
+          exposeVerificationSource: false,
+        });
+
+        try {
+          const securityFlags = await this.logAttempt(normalizedPayload, outcome, context);
+          if (outcome.response && outcome.response.valid) {
+            return {
+              ...outcome.response,
+              suspicious: securityFlags.length > 0,
+              security_flags: securityFlags,
+            };
+          }
+
+          return outcome.response;
+        } catch (logError) {
+          logger.error('verification_log_failed', {
+            message: logError.message,
+          });
+          return outcome.response;
+        }
+      }
+
+      if (parsedComponents && parsedComponents.components) {
+        normalizedPayload = { ...normalizedPayload, ...parsedComponents.components };
         wasParsedGs1 = true;
       }
     }
@@ -69,12 +111,22 @@ class VerificationService {
 
     // 3. Persist log metrics safely
     try {
-      await this.logAttempt(normalizedPayload, outcome);
-    } catch (logError) {
-      console.error('Audit trail logging failed:', logError);
-    }
+      const securityFlags = await this.logAttempt(normalizedPayload, outcome, context);
+      if (outcome.response && outcome.response.valid) {
+        return {
+          ...outcome.response,
+          suspicious: securityFlags.length > 0,
+          security_flags: securityFlags,
+        };
+      }
 
-    return outcome.response;
+      return outcome.response;
+    } catch (logError) {
+      logger.error('verification_log_failed', {
+        message: logError.message,
+      });
+      return outcome.response;
+    }
   }
 
   async verifyRawCode(code, scanMedium = null) {
@@ -96,6 +148,7 @@ class VerificationService {
         verificationSource: resolvedSource,
         verificationLevel: VERIFICATION_LEVELS.PRODUCT,
         inputType: assignedInputType,
+        contextPayload: { code } // 🌟 Pass the explicit raw string context here
       });
     }
 
@@ -109,6 +162,7 @@ class VerificationService {
         verificationSource: resolvedSource,
         verificationLevel: VERIFICATION_LEVELS.ITEM,
         inputType: assignedInputType,
+        contextPayload: { code } // 🌟 Pass the explicit raw string context here
       });
     }
 
@@ -117,6 +171,9 @@ class VerificationService {
       message: 'Product not registered. Please report to the nearest health facility.',
       inputType: assignedInputType,
       verificationSource: resolvedSource,
+      rawCode: code, // 🌟 Correctly assigns rawCode text strings
+      exposeInput: false,
+      exposeVerificationSource: false,
     });
   }
 
@@ -138,6 +195,10 @@ class VerificationService {
         message: 'Product not registered. Please report to the nearest health facility.',
         inputType: assignedInputType,
         verificationSource,
+        // 🌟 FIXED: Directly strips values from components array layer to pass to response
+        gtin: components.gtin || null,
+        serialNumber: components.serial_number || null,
+        batchNumber: components.batch_number || null
       });
     }
 
@@ -154,6 +215,10 @@ class VerificationService {
         inputType: assignedInputType,
         verificationSource,
         matchedProductId: this.firstKnownProductId({ productCodes, itemCode, batchRecords }),
+        // 🌟 FIXED: Map variables across down to the error payload wrapper
+        gtin: components.gtin || null,
+        serialNumber: components.serial_number || null,
+        batchNumber: components.batch_number || null
       });
     }
 
@@ -213,6 +278,7 @@ class VerificationService {
         verificationSource,
         verificationLevel: VERIFICATION_LEVELS.ITEM,
         inputType: assignedInputType,
+        contextPayload: components // 🌟 Pass the parsed QR components object here
       });
     }
 
@@ -223,6 +289,7 @@ class VerificationService {
         verificationSource,
         verificationLevel: VERIFICATION_LEVELS.BATCH,
         inputType: assignedInputType,
+        contextPayload: components // 🌟 Pass the parsed QR components object here
       });
     }
 
@@ -241,6 +308,7 @@ class VerificationService {
     verificationSource,
     verificationLevel,
     inputType,
+    contextPayload = {}, // 🌟 Securely handle the passed context values
   }) {
     const metadata = await this.drugRepository.getProductMetadata({ productId, batchId, itemId });
 
@@ -275,6 +343,10 @@ class VerificationService {
           expiry_date: toDateOnly(metadata.expiry_date),
           verification_source: verificationSource,
           verification_level: verificationLevel,
+          // Fallback variables safe from scoping errors
+          serial_number: contextPayload.serial_number || null,
+          gtin: contextPayload.gtin || null,
+          code: contextPayload.code || null
         },
         log: {
           ...logContext,
@@ -285,7 +357,14 @@ class VerificationService {
     }
 
     return {
-      response: this.formatSuccessResponse(metadata, verificationSource, verificationLevel),
+      response: this.formatSuccessResponse(
+        metadata, 
+        verificationSource, 
+        verificationLevel, 
+        contextPayload.serial_number || null, // 🌟 Stripped the greedy fallback to contextPayload.code
+        contextPayload.gtin || null,
+        contextPayload.code || null
+      ),
       log: {
         ...logContext,
         success: true,
@@ -293,7 +372,7 @@ class VerificationService {
     };
   }
 
-  formatSuccessResponse(metadata, verificationSource, verificationLevel) {
+  formatSuccessResponse(metadata, verificationSource, verificationLevel, serialNumber = null, gtinCode = null, rawCode = null) {
     const response = {
       valid: true,
       expired: false,
@@ -309,8 +388,14 @@ class VerificationService {
       expiry_date: toDateOnly(metadata.expiry_date),
       verification_source: verificationSource,
       verification_level: verificationLevel,
+      
+      // 🌟 CORRECTED: Strict key-value assignments to prevent ReferenceErrors
+      serial_number: serialNumber, 
+      gtin: gtinCode,
+      code: rawCode
     };
 
+    // Strip null fields to optimize network payload sizes safely
     Object.keys(response).forEach((key) => {
       if (response[key] === null) {
         delete response[key];
@@ -329,9 +414,22 @@ class VerificationService {
     matchedProductId = null,
     matchedItemId = null,
     matchedBatchId = null,
+    rawCode = null, // 🌟 Accept the input code string context
+    gtin = null,          // 🌟 NEW: Accept components
+    serialNumber = null,  // 🌟 NEW: Accept components
+    batchNumber = null,   // 🌟 NEW: Accept components
+    exposeInput = true,
+    exposeVerificationSource = true,
   }) {
     const response = { valid: false, reason };
+    if (verificationSource && exposeVerificationSource) response.verification_source = verificationSource;
     if (message) response.message = message;
+
+    // 🌟 FIXED: Conditionally append parameters back to the JSON payload matching your exact schema layout
+    if (exposeInput && rawCode) response.code = rawCode;
+    if (exposeInput && gtin) response.gtin = gtin;
+    if (exposeInput && serialNumber) response.serial_number = serialNumber;
+    if (exposeInput && batchNumber) response.batch_number = batchNumber;
 
     return {
       response,
@@ -349,75 +447,26 @@ class VerificationService {
   }
 
   parseGs1DataMatrix(rawString) {
-    if (!rawString || typeof rawString !== 'string') return null;
-
-    let cleanStr = rawString.trim().replace(/[\x1d~]/g, ' ').replace(/\s+/g, ' ');
-
-    const result = { gtin: null, serial_number: null, batch_number: null };
-    let currentIndex = 0;
-    let iterations = 0;
-
-    while (currentIndex < cleanStr.length && iterations < 10) {
-      iterations++;
-
-      if (cleanStr[currentIndex] === ' ') {
-        currentIndex++;
-        continue;
-      }
-
-      const remainingText = cleanStr.slice(currentIndex);
-
-      if (remainingText.startsWith('01')) {
-        result.gtin = remainingText.slice(2, 16);
-        currentIndex += 16;
-        continue;
-      }
-
-      if (remainingText.startsWith('17')) {
-        currentIndex += 8;
-        continue;
-      }
-
-      if (remainingText.startsWith('21')) {
-        const dataPart = remainingText.slice(2);
-        const spaceIdx = dataPart.indexOf(' ');
-        if (spaceIdx !== -1) {
-          result.serial_number = dataPart.slice(0, spaceIdx);
-          currentIndex += 2 + spaceIdx + 1;
-        } else {
-          result.serial_number = dataPart;
-          currentIndex += 2 + dataPart.length;
-        }
-        continue;
-      }
-
-      if (remainingText.startsWith('10')) {
-        const dataPart = remainingText.slice(2);
-        const spaceIdx = dataPart.indexOf(' ');
-        if (spaceIdx !== -1) {
-          result.batch_number = dataPart.slice(0, spaceIdx);
-          currentIndex += 2 + spaceIdx + 1;
-        } else {
-          result.batch_number = dataPart;
-          currentIndex += 2 + dataPart.length;
-        }
-        continue;
-      }
-
-      currentIndex++;
-    }
-
-    if (result.gtin && (result.serial_number || result.batch_number)) {
-      if (!result.serial_number) delete result.serial_number;
-      if (!result.batch_number) delete result.batch_number;
-      return result;
-    }
-
-    return null;
+    return parseGs1DataMatrix(rawString);
   }
 
-  async logAttempt(payload, outcome) {
+  async logAttempt(payload, outcome, context = {}) {
     const value = payload.code ? payload.code : `gtin:${payload.gtin || ''}|sn:${payload.serial_number || ''}|bn:${payload.batch_number || ''}`;
+    const securityFlags = Array.isArray(context.securityFlags) ? [...context.securityFlags] : [];
+    const clientTelemetry = payload.client_telemetry || {};
+
+    const forensicEvaluation = await this.forensicService.assessScan({
+      payload,
+      outcome,
+      context,
+    });
+
+    forensicEvaluation.forensicFlags.forEach((flag) => {
+      if (!securityFlags.includes(flag)) {
+        securityFlags.push(flag);
+      }
+    });
+
     await this.scanLogRepository.create({
       scannedValue: value,
       inputType: outcome.log.inputType,
@@ -427,8 +476,21 @@ class VerificationService {
       matchedProductId: outcome.log.matchedProductId,
       matchedItemId: outcome.log.matchedItemId,
       matchedBatchId: outcome.log.matchedBatchId,
-      metadata: { verification_level: outcome.log.verificationLevel },
+      requestId: context.requestId,
+      ipAddress: context.ipAddress,
+      userAgent: context.userAgent,
+      suspicious: securityFlags.length > 0,
+      securityFlags,
+      metadata: {
+        verification_level: outcome.log.verificationLevel,
+        verification_source: outcome.log.verificationSource,
+        scan_source: outcome.log.verificationSource,
+        client_telemetry: clientTelemetry,
+        ...forensicEvaluation.forensicMetadata,
+      },
     });
+
+    return securityFlags;
   }
 
   normalizePayload(payload) {

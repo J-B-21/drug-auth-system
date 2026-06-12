@@ -38,11 +38,20 @@ function getLocalIp() {
 const localIp = getLocalIp();
 console.log(`Connected on local IP -> ${localIp}`);
 
-// Detect what action the user called (start vs android)
-const isAndroid = process.argv.includes('android');
+// 🌟 UPDATED: Smarter Action Router Selector Engine
+const isAndroidGo = process.argv.includes('android');
+const isNativeBuild = process.argv.includes('run-android');
 const clearCache = process.argv.includes('--clear') ? ' -c' : '';
 
-const action = isAndroid ? `expo start --android${clearCache} --offline` : `expo start${clearCache} --offline`;
+let action = '';
+if (isAndroidGo) {
+  action = `expo start --android${clearCache} --offline`;
+} else if (isNativeBuild) {
+  // 🌟 Fires the native run command with your offline parameters intact!
+  action = `expo run:android${clearCache === ' -c' ? ' --no-build-cache' : ''}`;
+} else {
+  action = `expo start${clearCache} --offline`;
+}
 
 // Inject the environment binding dynamically directly into the active system shell context execution pass
 try {

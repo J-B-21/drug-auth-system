@@ -1,53 +1,33 @@
 // Knex configuration for different environments.
-// Reads DB connection settings from environment variables via `.env`.
+// Reads validated DB connection settings from centralized configuration.
 // Do not include secrets in source control; `.env` is gitignored.
-require('dotenv').config();
+const config = require('./src/config/env');
+
+const buildConfig = ({ includeSeeds = false } = {}) => ({
+  client: 'pg',
+  connection: config.database.connection,
+  pool: config.database.pool,
+  migrations: {
+    directory: './src/config/migrations'
+  },
+  ...(includeSeeds ? {
+    seeds: {
+      directory: './src/config/seeds'
+    }
+  } : {})
+});
 
 /**
  * @type { Object.<string, import("knex").Knex.Config> }
  */
 module.exports = {
 
-  development: {
-    client: 'pg',
-    connection: {
-      host: process.env.DB_HOST,
-      user: process.env.DB_USER,
-      password: process.env.DB_PASSWORD,
-      database: process.env.DB_DATABASE,
-    },
-    migrations: {
-      directory: './src/config/migrations'
-    },
-    seeds: {
-      directory: './src/config/seeds'
-    }
-  },
+  development: buildConfig({ includeSeeds: true }),
 
-  staging: {
-    client: 'pg',
-    connection: {
-      host: process.env.DB_HOST,
-      user: process.env.DB_USER,
-      password: process.env.DB_PASSWORD,
-      database: process.env.DB_DATABASE,
-    },
-    migrations: {
-      directory: './src/config/migrations'
-    }
-  },
+  test: buildConfig({ includeSeeds: true }),
 
-  production: {
-    client: 'pg',
-    connection: {
-      host: process.env.DB_HOST,
-      user: process.env.DB_USER,
-      password: process.env.DB_PASSWORD,
-      database: process.env.DB_DATABASE,
-    },
-    migrations: {
-      directory: './src/config/migrations'
-    }
-  }
+  staging: buildConfig(),
+
+  production: buildConfig()
 
 };

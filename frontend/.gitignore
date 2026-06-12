@@ -38,6 +38,12 @@ yarn-error.*
 
 app-example
 
+# application files
+*.apk
+*.ipa
+*.ap_
+*.aab
+
 # generated native folders
 /ios
 /android

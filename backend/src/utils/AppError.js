@@ -20,7 +20,15 @@ class ValidationError extends AppError {
   }
 }
 
+class TooManyRequestsError extends AppError {
+  constructor(message = 'Too many requests. Please try again later.', retryAfterSeconds = undefined) {
+    super(message, 429);
+    this.retryAfterSeconds = retryAfterSeconds;
+  }
+}
+
 module.exports = {
   AppError,
+  TooManyRequestsError,
   ValidationError,
 };
